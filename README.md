@@ -1,2 +1,656 @@
 # Kubernetes_Concepts_Implementation
-Practising and building use cases for implementing Kubernetes concepts
+Practising and building use cases for implementing Kubernetes concepts 
+
+#### Create HPA in Kubernetes Cluster 
+
+HPA automatically scales the number of pod replicas based on observed CPU utilization or custom metrics.
+
+
+Prerequistes: 
+
+Install Metric Server as deployment:
+
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+
+Validate Metrics-server is installed: 
+
+kubectl get deployment metrics-server -n kube-system 
+
+kubectl logs deploy/metrics-server -n kube-system 
+
+kubectl get pods -n kube-system | grep metrics-server
+
+kubectl edit deployment metrics-server -n kube-system
+Modify the containers.args section like this:
+
+        - --kubelet-insecure-tls
+        - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+This avoids TLS errors when metrics-server tries to talk to kubelets. 
+
+
+Test Metrics API:
+
+kubectl top nodes
+
+kubectl top pods
+
+
+kubectl get --raw "/apis/metrics.k8s.io/v1beta1/nodes" | jq  
+
+
+
+Test HPA:
+
+
+Create Deployment
+Let’s create the PHP-Apache deployment (CPU-consuming app):
+
+
+# hpa-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: php-apache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: php-apache
+  template:
+    metadata:
+      labels:
+        app: php-apache
+    spec:
+      containers:
+      - name: php-apache
+        image: k8s.gcr.io/hpa-example
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 200m
+          limits:
+            cpu: 500m
+Apply it:
+kubectl apply -f hpa-deployment.yaml
+
+Step 2: Expose the Deployment
+bash
+Copy
+Edit
+kubectl expose deployment php-apache --port=80 --type=ClusterIP
+Step 3: Create the HPA
+
+kubectl autoscale deployment php-apache --cpu-percent=50 --min=1 --max=10
+
+Verify HPA:
+
+
+kubectl get hpa
+You should see something like:
+
+NAME         REFERENCE              TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+php-apache   Deployment/php-apache 0%/50%     1         10        1          10s
+Step 4: Simulate Load
+Launch a busybox pod:
+
+
+kubectl run -i --tty load-generator --image=busybox /bin/sh
+Inside the shell:
+
+
+while true; do wget -q -O- http://php-apache; done
+Keep it running for a minute or two.
+
+Step 5: Watch HPA Autoscale
+In another terminal:
+
+
+watch kubectl get hpa
+You’ll see the TARGETS % increase, and REPLICAS grow as needed. 
+
+
+
+#### Test HPA with Custome Metrics using Prometheus##########
+
+
+
+helm install prometheus-adapter prometheus-community/prometheus-adapter \
+  --namespace monitoring \
+  --set prometheus.url=http://prometheus.istio-system.svc \
+  --set prometheus.port=9090   
+
+
+create ur Nodejs app to expose ur custom metrics using prom-client, and create a service monitor so prometheus can scrape the metrics. 
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cafe-nodejs-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cafe-nodejs-app
+  template:
+    metadata:
+      labels:
+        app: cafe-nodejs-app
+      annotations:
+        co.elastic.logs/enabled: "true"
+        co.elastic.logs/module: "nodejs"
+    spec:
+      containers:
+        - name: cafe-nodejs-app
+          image: sreedocker123/nodejs_prometheus_mtrics:v4
+          ports:
+            - containerPort: 3000
+
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: cafe-nodejs-service
+  labels:                  # ✅ Add this!
+    app: cafe-nodejs-app   # ✅ Must match ServiceMonitor selector
+spec:
+  type: NodePort
+  selector:
+    app: cafe-nodejs-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      nodePort: 30080
+
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cafe-nodejs-servicemonitor
+  labels:
+    release: prometheus  # Must match your Prometheus release label!
+spec:
+  selector:
+    matchLabels:
+      app: cafe-nodejs-app
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+
+
+kubectl apply -f deployment, service and service monitor files. 
+
+
+Create HPA file to scale based on custom metrics. 
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cafe-nodejs-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cafe-nodejs-app
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Pods
+    pods:
+      metric:
+        name: cafe_welcome_requests_total
+      target:
+        type: AverageValue
+        averageValue: "5"
+ 
+
+
+### To scale based on Istio mesh custom metrics of envoy proxies####
+
+
+Create custom yaml file for prometheus adapter. 
+
+rules:
+  custom:
+    - seriesQuery: 'istio_requests_total{destination_workload="cafe-nodejs-app"}'
+      resources:
+        overrides:
+          namespace:
+            resource: "namespace"
+          pod:
+            resource: "pod"
+      name:
+        matches: ".*"
+        as: "istio_requests_total"
+      metricsQuery: 'sum(rate(istio_requests_total{destination_workload="cafe-nodejs-app"}[1m])) by (pod, namespace)'
+
+helm install prometheus-adapter prometheus-community/prometheus-adapter \
+  --namespace monitoring \
+  --set prometheus.url=http://prometheus.istio-system.svc \
+  --set prometheus.port=9090  -f custom-calues.yaml 
+
+
+
+
+Create HPA file to scale based on istio metrics. 
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cafe-nodejs-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cafe-nodejs-app
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Pods
+    pods:
+      metric:
+        name: istio_requests_total
+      target:
+        type: AverageValue
+        averageValue: "5"
+
+
+
+
+### Statefulset Implementaion for Web and Databases 
+
+
+
+
+
+
+
+### Jobs - One-time and Cron Jobs
+What Are Job Pods / Containers?
+Job: A Kubernetes resource used to run a one-time task or batch job (e.g., database backup, ETL, data migration). It ensures a task completes successfully once.
+
+Pod: The smallest deployable unit in Kubernetes, may contain one or more containers sharing:
+
+Network
+
+Volumes
+
+IPC namespace
+
+🔹 Init Containers – What Are They?
+Special containers that run before the main container(s).
+
+Used for initialization logic: setup, checks, wait-until-ready, cloning repos, etc.
+
+Run sequentially, each must complete before the next one starts.
+
+✅ Use Case: Init Container + Multi-Container Pod
+Let’s take a practical example:
+
+🧩 Scenario: App Pod with Redis Sidecar + Init Setup
+You want to deploy a pod that:
+
+Uses an init container to wait until a database (e.g., MySQL) is available
+
+Then launches:
+
+A web app container
+
+A Redis sidecar container for caching
+
+📄 Example Manifest: multi-container-with-init.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp-with-init
+spec:
+  initContainers:
+  - name: wait-for-mysql
+    image: busybox
+    command: ['sh', '-c', 'until nc -z mysql 3306; do echo waiting for mysql; sleep 2; done;']
+  
+  containers:
+  - name: webapp
+    image: php:8.1-apache
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: html
+      mountPath: /var/www/html
+
+  - name: redis
+    image: redis:alpine
+    ports:
+    - containerPort: 6379
+
+  volumes:
+  - name: html
+    emptyDir: {}
+
+Component	Description
+initContainers.wait-for-mysql	Waits for MySQL DB to be reachable before starting main containers.
+containers.webapp	Main app, e.g., PHP site that depends on DB and uses Redis.
+containers.redis	Sidecar container running Redis in same pod (shared network).
+volumes.html	Shared volume between containers (if needed).
+
+🚀 How to Deploy
+
+
+kubectl apply -f multi-container-with-init.yaml
+kubectl get pods
+kubectl logs webapp-with-init -c wait-for-mysql   # View init logs
+✅ Use Cases Recap
+Use Case	What to Use
+Wait for DB to come up	Init container
+Download code/config before app starts	Init container
+Add a logging or monitoring container	Sidecar container
+Serve static files from one, and process via another	Multi-container pod
+Real-time processing + buffer	e.g., Nginx + App, Fluentd + App
+
+
+
+
+✅ 1. Command to List All Containers of a Pod
+To list all containers (including init containers) of a pod:
+
+
+kubectl get pod <pod-name> -o jsonpath="{.spec.initContainers[*].name} {.spec.containers[*].name}"
+Example:
+
+
+kubectl get pod webapp-with-init -o jsonpath="{.spec.initContainers[*].name} {.spec.containers[*].name}"
+To see status (running, completed, etc.) of all containers in a pod:
+
+
+kubectl describe pod <pod-name>
+✅ 2. How to Access the Redis Container
+To exec into the Redis container inside a pod:
+
+kubectl exec -it <pod-name> -c redis -- sh
+Example:
+
+
+kubectl exec -it webapp-with-init -c redis -- sh
+Then inside the Redis container:
+
+
+redis-cli
+✅ 3. What Happened to the Init Container?
+You’re correct! Here's what happened:
+
+Your initContainer was designed to wait for MySQL to be available.
+
+If you have a mysql headless service and StatefulSet, then the command:
+
+
+nc -z mysql 3306
+would succeed once any one MySQL pod is reachable via the service name mysql.
+
+✅ So the init container finished successfully, and then the main containers (webapp, redis) started.
+
+You can check the status of the init container:
+
+kubectl get pod webapp-with-init -o jsonpath="{.status.initContainerStatuses[*].state}"
+Or view the logs:
+
+
+kubectl logs webapp-with-init -c wait-for-mysql
+You’ll likely see:
+
+
+waiting for mysql
+waiting for mysql
+...
+and then it exits successfully once mysql becomes available.
+
+TL;DR
+✅ Use -c <container-name> to access any container in a pod.
+
+✅ Init containers run before main containers and exit once done.
+
+✅ You can view status and logs of init containers like normal ones.
+
+✅ Your Redis container runs as a sidecar alongside the web app in the same pod, sharing network and volume if needed.  
+
+
+
+
+
+
+
+
+#### Jobs - One time and Cron jOB
+
+
+
+What Are Jobs in Kubernetes?
+A Job runs a task to completion — one or more pods are created, and once they successfully finish their task, the Job is done.
+
+✅ Real-World Use Cases:
+Use Case	Description
+Database Migration	Run SQL scripts to migrate schema or seed data
+Backup Task	Dump DB and store it on cloud (S3, NFS, etc.)
+Report Generation	Generate daily/weekly reports
+Data Processing	Process files, logs, etc. in batches
+
+✅ Example 1: One-time Job — Hello World
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hello-job
+spec:
+  template:
+    spec:
+      containers:
+      - name: hello
+        image: busybox
+        command: ["echo", "Hello from Kubernetes Job"]
+      restartPolicy: Never
+  backoffLimit: 4
+Run it:
+
+
+kubectl apply -f hello-job.yaml
+kubectl logs job/hello-job
+🔁 What Are CronJobs?
+A CronJob runs Jobs on a schedule, like a Linux cron.
+
+✅ Real-World Use Cases:
+Use Case	Description
+Nightly Backup	Backup DB at 2 AM every night
+Log Cleanup	Delete old logs every week
+Health Check Ping	Ping internal services regularly
+Email Digest	Send daily/weekly email summaries
+
+✅ Example 2: CronJob — Say Hello Every Minute
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hello-cron
+spec:
+  schedule: "*/1 * * * *"  # every 1 minute
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: hello
+            image: busybox
+            command: ["echo", "Hello from CronJob"]
+          restartPolicy: OnFailure
+Apply it:
+
+
+kubectl apply -f hello-cron.yaml
+
+Check job runs:
+
+kubectl get jobs
+kubectl logs job/<job-name>
+✅ Optional Example: MySQL Backup Job (Realistic)
+yaml
+Copy
+Edit
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mysql-backup
+spec:
+  template:
+    spec:
+      containers:
+      - name: backup
+        image: mysql:5.7
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: rootpass
+        command: ["sh", "-c", "mysqldump -h mysql-master -u root -p$MYSQL_ROOT_PASSWORD ecomm > /backup/ecomm.sql"]
+        volumeMounts:
+        - name: backup-volume
+          mountPath: /backup
+      restartPolicy: OnFailure
+      volumes:
+      - name: backup-volume
+        hostPath:
+          path: /mnt/mysql-backups 
+          type: Directory
+
+
+
+
+#### Back up Statefullset Mysql master Database######
+
+
+
+Backup Job for ecomm Database (MySQL Master)
+📦 Creates:
+A Job that runs mysqldump from the MySQL container.
+
+A hostPath volume (/mnt/mysql-backups) to save the SQL dump.
+
+🔧 mysql-backup-job.yaml
+yaml
+Copy
+Edit
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mysql-backup
+spec:
+  template:
+    spec:
+      containers:
+      - name: backup
+        image: mysql:8.0
+        command:
+          - sh
+          - -c
+          - >
+            mysqldump -h mysql-master-0.mysql.default.svc.cluster.local 
+                      -u root 
+                      -prootpass 
+                      ecomm > /backup/ecomm_backup.sql
+        volumeMounts:
+        - name: backup-volume
+          mountPath: /backup
+      restartPolicy: OnFailure
+      volumes:
+      - name: backup-volume
+        hostPath:
+          path: /mnt/mysql-backups
+          type: Directory
+  backoffLimit: 2
+📌 Update -prootpass with your actual password if different.
+
+✅ Create the Job
+
+kubectl apply -f mysql-backup-job.yaml
+📥 Verify
+Check Job Status
+
+
+kubectl get jobs
+Check Logs
+
+
+kubectl logs job/mysql-backup
+Verify Dump File on Host
+Log in to the node where the pod ran and check:
+
+ls /mnt/mysql-backups/ecomm_backup.sql 
+
+
+
+### Load Generator Job####
+
+
+
+Example: Load Generator Job using hey
+Here’s a simple Kubernetes Job manifest that runs hey against your Istio Gateway:
+
+1. Job Manifest
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: load-generator
+spec:
+  template:
+    spec:
+      containers:
+      - name: hey
+        image: rakyll/hey
+        command: ["hey"]
+        args: ["-z", "5m", "-q", "10", "http://172.16.51.60.nip.io:30687"]
+        # -z 5m = run for 5 minutes
+        # -q 10 = 10 requests per second
+      restartPolicy: Never
+  backoffLimit: 0
+You can tweak -z for how long to run or use -n for total number of requests.
+
+🌀 If you want it to run indefinitely (until manually stopped):
+You can use a Pod instead of a Job, and put it in a loop.
+
+2. Pod Manifest with curl loop
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: load-generator
+spec:
+  containers:
+  - name: curl
+    image: curlimages/curl
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        while true; do
+          curl -s http://172.16.51.60.nip.io:30687 > /dev/null
+          sleep 0.1
+        done
+  restartPolicy: Never
+This will continuously send a request every 0.1 seconds until the pod is deleted.
+
+🔥 To deploy:
+
+kubectl apply -f load-generator-job.yaml
+# or
+kubectl apply -f load-generator-pod.yaml
+🛑 To stop:
+
+kubectl delete job load-generator
+# or
+kubectl delete pod load-generator
+
+
+
+
+
+
