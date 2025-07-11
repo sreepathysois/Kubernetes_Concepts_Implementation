@@ -1,0 +1,45 @@
+# pv-nginx-0.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-nginx-0
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  hostPath:
+    path: "/mnt/data/nginx-0"
+  persistentVolumeReclaimPolicy: Retain
+---
+# pv-nginx-1.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-nginx-1
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  hostPath:
+    path: "/mnt/data/nginx-1"
+  persistentVolumeReclaimPolicy: Retain
+---
+# pv-nginx-2.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-nginx-2
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  hostPath:
+    path: "/mnt/data/nginx-2"
+  persistentVolumeReclaimPolicy: Retain
+

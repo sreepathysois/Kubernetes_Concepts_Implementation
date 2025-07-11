@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-read
+  labels:
+    role: slave
+spec:
+  selector:
+    app: mysql
+    role: slave
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+

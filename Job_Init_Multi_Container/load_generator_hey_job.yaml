@@ -1,0 +1,17 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: load-generator
+spec:
+  template:
+    spec:
+      containers:
+      - name: hey
+        image: rakyll/hey
+        command: ["hey"]
+        args: ["-z", "5m", "-q", "10", "http://172.16.51.60.nip.io:30687"]
+        # -z 5m = run for 5 minutes
+        # -q 10 = 10 requests per second
+      restartPolicy: Never
+  backoffLimit: 0
+

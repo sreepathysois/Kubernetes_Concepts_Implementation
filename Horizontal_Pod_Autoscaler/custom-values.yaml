@@ -1,0 +1,13 @@
+rules:
+  custom:
+    - seriesQuery: 'istio_requests_total{destination_workload="cafe-nodejs-app"}'
+      resources:
+        overrides:
+          namespace:
+            resource: "namespace"
+          pod:
+            resource: "pod"
+      name:
+        matches: ".*"
+        as: "istio_requests_total"
+      metricsQuery: 'sum(rate(istio_requests_total{destination_workload="cafe-nodejs-app"}[1m])) by (pod, namespace)'

@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mysql-backup
+spec:
+  template:
+    spec:
+      containers:
+      - name: backup
+        image: mysql:8.0
+        command:
+          - sh
+          - -c
+          - >
+            mysqldump -h mysql-master-0.mysql.default.svc.cluster.local 
+                      -u root 
+                      -prootpass 
+                      ecomm > /backup/ecomm_backup.sql
+        volumeMounts:
+        - name: backup-volume
+          mountPath: /backup
+      restartPolicy: OnFailure
+      volumes:
+      - name: backup-volume
+        hostPath:
+          path: /mnt/mysql-backups
+          type: Directory
+  backoffLimit: 2
+

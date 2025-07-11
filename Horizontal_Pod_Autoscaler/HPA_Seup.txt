@@ -1,0 +1,262 @@
+#### Create HPA in Kubernetes Cluster###
+
+HPA automatically scales the number of pod replicas based on observed CPU utilization or custom metrics.
+
+
+Prerequistes: 
+
+Install Metric Server as deployment:
+
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+
+Validate Metrics-server is installed: 
+
+kubectl get deployment metrics-server -n kube-system 
+
+kubectl logs deploy/metrics-server -n kube-system 
+
+kubectl get pods -n kube-system | grep metrics-server
+
+kubectl edit deployment metrics-server -n kube-system
+Modify the containers.args section like this:
+
+        - --kubelet-insecure-tls
+        - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+This avoids TLS errors when metrics-server tries to talk to kubelets. 
+
+
+Test Metrics API:
+
+kubectl top nodes
+
+kubectl top pods
+
+
+kubectl get --raw "/apis/metrics.k8s.io/v1beta1/nodes" | jq  
+
+
+
+Test HPA:
+
+
+Create Deployment
+Let’s create the PHP-Apache deployment (CPU-consuming app):
+
+
+# hpa-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: php-apache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: php-apache
+  template:
+    metadata:
+      labels:
+        app: php-apache
+    spec:
+      containers:
+      - name: php-apache
+        image: k8s.gcr.io/hpa-example
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 200m
+          limits:
+            cpu: 500m
+Apply it:
+kubectl apply -f hpa-deployment.yaml
+
+Step 2: Expose the Deployment
+bash
+Copy
+Edit
+kubectl expose deployment php-apache --port=80 --type=ClusterIP
+Step 3: Create the HPA
+
+kubectl autoscale deployment php-apache --cpu-percent=50 --min=1 --max=10
+
+Verify HPA:
+
+
+kubectl get hpa
+You should see something like:
+
+NAME         REFERENCE              TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+php-apache   Deployment/php-apache 0%/50%     1         10        1          10s
+Step 4: Simulate Load
+Launch a busybox pod:
+
+
+kubectl run -i --tty load-generator --image=busybox /bin/sh
+Inside the shell:
+
+
+while true; do wget -q -O- http://php-apache; done
+Keep it running for a minute or two.
+
+Step 5: Watch HPA Autoscale
+In another terminal:
+
+
+watch kubectl get hpa
+You’ll see the TARGETS % increase, and REPLICAS grow as needed. 
+
+
+
+#### Test HPA with Custome Metrics using Prometheus##########
+
+
+
+helm install prometheus-adapter prometheus-community/prometheus-adapter \
+  --namespace monitoring \
+  --set prometheus.url=http://prometheus.istio-system.svc \
+  --set prometheus.port=9090   
+
+
+create ur Nodejs app to expose ur custom metrics using prom-client, and create a service monitor so prometheus can scrape the metrics. 
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cafe-nodejs-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cafe-nodejs-app
+  template:
+    metadata:
+      labels:
+        app: cafe-nodejs-app
+      annotations:
+        co.elastic.logs/enabled: "true"
+        co.elastic.logs/module: "nodejs"
+    spec:
+      containers:
+        - name: cafe-nodejs-app
+          image: sreedocker123/nodejs_prometheus_mtrics:v4
+          ports:
+            - containerPort: 3000
+
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: cafe-nodejs-service
+  labels:                  # ✅ Add this!
+    app: cafe-nodejs-app   # ✅ Must match ServiceMonitor selector
+spec:
+  type: NodePort
+  selector:
+    app: cafe-nodejs-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      nodePort: 30080
+
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cafe-nodejs-servicemonitor
+  labels:
+    release: prometheus  # Must match your Prometheus release label!
+spec:
+  selector:
+    matchLabels:
+      app: cafe-nodejs-app
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+
+
+kubectl apply -f deployment, service and service monitor files. 
+
+
+Create HPA file to scale based on custom metrics. 
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cafe-nodejs-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cafe-nodejs-app
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Pods
+    pods:
+      metric:
+        name: cafe_welcome_requests_total
+      target:
+        type: AverageValue
+        averageValue: "5"
+ 
+
+
+### To scale based on Istio mesh custom metrics of envoy proxies####
+
+
+Create custom yaml file for prometheus adapter. 
+
+rules:
+  custom:
+    - seriesQuery: 'istio_requests_total{destination_workload="cafe-nodejs-app"}'
+      resources:
+        overrides:
+          namespace:
+            resource: "namespace"
+          pod:
+            resource: "pod"
+      name:
+        matches: ".*"
+        as: "istio_requests_total"
+      metricsQuery: 'sum(rate(istio_requests_total{destination_workload="cafe-nodejs-app"}[1m])) by (pod, namespace)'
+
+helm install prometheus-adapter prometheus-community/prometheus-adapter \
+  --namespace monitoring \
+  --set prometheus.url=http://prometheus.istio-system.svc \
+  --set prometheus.port=9090  -f custom-calues.yaml 
+
+
+
+
+Create HPA file to scale based on istio metrics. 
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cafe-nodejs-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cafe-nodejs-app
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Pods
+    pods:
+      metric:
+        name: istio_requests_total
+      target:
+        type: AverageValue
+        averageValue: "5"
+
+
+
+
+
+

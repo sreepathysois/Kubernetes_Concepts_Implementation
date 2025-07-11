@@ -1,0 +1,12 @@
+###########Steps to setup Staefullset##########
+
+
+echo "Hello from nginx-0" > /usr/share/nginx/html/index.html
+
+echo "Hello from nginx-1" > /usr/share/nginx/html/index.html
+
+echo "Hello from nginx-2" > /usr/share/nginx/html/index.html
+
+
+
+echo "Hello from nginx-1" | sudo tee /mnt/data/nginx-1/index.html
