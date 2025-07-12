@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecomm-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ecomm-app
+  template:
+    metadata:
+      labels:
+        app: ecomm-app
+    spec:
+      containers:
+        - name: php-app
+          image: sreedocker123/frontendphpstatefullset:v1
+          ports:
+            - containerPort: 80
+
