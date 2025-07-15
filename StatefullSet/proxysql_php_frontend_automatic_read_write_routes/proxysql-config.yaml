@@ -27,8 +27,8 @@ data:
     mysql_servers =
     (
       { address = "mysql-master-0.mysql.default.svc.cluster.local", port = 3306, hostgroup = 10, max_connections=100 },
-      { address = "mysql-slave-0.mysql.svc.cluster.local", port = 3306, hostgroup = 20, max_connections = 100, weight = 100, max_replication_lag = 10 },
-      { address = "mysql-slave-1.mysql.svc.cluster.local", port = 3306, hostgroup = 20, max_connections = 100, weight = 50, max_replication_lag = 10 }
+      { address = "mysql-slave-0.mysql.default.svc.cluster.local", port = 3306, hostgroup = 20, max_connections = 100, weight = 100, max_replication_lag = 10 },
+      { address = "mysql-slave-1.mysql.default.svc.cluster.local", port = 3306, hostgroup = 20, max_connections = 100, weight = 50, max_replication_lag = 10 }
     )
 
     mysql_users =
