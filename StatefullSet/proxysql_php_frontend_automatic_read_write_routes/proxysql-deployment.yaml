@@ -11,17 +11,30 @@ spec:
     metadata:
       labels:
         app: proxysql
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "42004"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
       - name: proxysql
         image: proxysql/proxysql:latest
         ports:
-        - containerPort: 6032  # admin
+        - containerPort: 6032  # Admin
         - containerPort: 6033  # MySQL client
         volumeMounts:
         - name: proxysql-config
           mountPath: /etc/proxysql.cnf
           subPath: proxysql.cnf
+
+      - name: proxysql-exporter
+        image: mpolednik/proxysql-exporter:latest
+        ports:
+        - containerPort: 42004
+        env:
+        - name: DATA_SOURCE_NAME
+          value: "admin:admin@tcp(127.0.0.1:6032)/"
+
       volumes:
       - name: proxysql-config
         configMap:
